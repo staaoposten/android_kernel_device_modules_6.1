@@ -1040,11 +1040,6 @@ static int bq_battery_soc_smooth_tracking_new(struct bq_fg_chip *bq, int raw_soc
 		bq->normal_shutdown_vbat = bq->shutdown_voltage + 30;
 	}
 
-	if ((system_soc == 0) && ((bq->vbat >= bq->normal_shutdown_vbat) || ((time.tv_sec <= 10)))) {
-		system_soc = 1;
-		fg_err("uisoc::hold 1 when volt > %dmV. \n", bq->normal_shutdown_vbat);
-	}
-
 	if(bq->last_soc != system_soc){
 		bq->last_soc = system_soc;
 		last_extreme_soc = system_soc;
@@ -1752,9 +1747,6 @@ static enum power_supply_property fg_props[] = {
 static int fg_get_property(struct power_supply *psy, enum power_supply_property psp, union power_supply_propval *val)
 {
 	struct bq_fg_chip *bq = power_supply_get_drvdata(psy);
-	static bool last_shutdown_delay = false;
-	union power_supply_propval pval = {0, };
-	int tem;
 
 	switch (psp) {
 	case POWER_SUPPLY_PROP_MODEL_NAME:
@@ -1773,66 +1765,13 @@ static int fg_get_property(struct power_supply *psy, enum power_supply_property 
 		mutex_unlock(&bq->data_lock);
 		break;
 	case POWER_SUPPLY_PROP_CAPACITY:
-		if (bq->fake_soc) {
-			val->intval = bq->fake_soc;
-			break;
-		}
 
 		if (bq->i2c_error_count >= 1) {
 			val->intval = 15;
 			break;
 		}
 
-		val->intval = bq->ui_soc;
-		//add shutdown delay feature
-		if (bq->enable_shutdown_delay) {
-			if (val->intval == 0) {
-				tem = bq->tbat;
-				if (!battery_get_psy(bq)) {
-					fg_err("%s get capacity failed to get battery psy\n", bq->log_tag);
-					break;
-				} else
-					power_supply_get_property(bq->batt_psy, POWER_SUPPLY_PROP_STATUS, &pval);
-				if (pval.intval != POWER_SUPPLY_STATUS_CHARGING) {
-					if(bq->shutdown_delay == true) {
-						val->intval = 1;
-					} else if (((tem > 0 && bq->cell_voltage[2] >= bq->critical_shutdown_vbat)
-						|| (tem <= 0 && bq->cell_voltage[2] >= bq->cool_critical_shutdown_vbat)) &&
-							bq->shutdown_flag == false) {
-						bq->shutdown_delay = true;
-						val->intval = 1;
-					} else {
-						bq->shutdown_delay = false;
-					}
-					fg_err("%s last_shutdown= %d. shutdown= %d, soc =%d, voltage =%d\n", bq->log_tag, last_shutdown_delay, bq->shutdown_delay, val->intval, bq->cell_voltage[2]);
-				} else {
-					bq->shutdown_delay = false;
-					if ((((tem > 0) && (bq->cell_voltage[2] >= (bq->critical_shutdown_vbat - 40)))
-						|| ((tem < 0) && (bq->cell_voltage[2] >= (bq->cool_critical_shutdown_vbat - 40)))
-						|| ((bq->cycle_count > 200) && (bq->cell_voltage[2] >= (bq->old_critical_shutdown_vbat - 40)))) &&
-							bq->shutdown_flag == false) {
-						val->intval = 1;
-					}
-				}
-			} else {
-				bq->shutdown_delay = false;
-			}
-
-			if (val->intval <= 0)
-				bq->shutdown_flag = true;
-			else
-				bq->shutdown_flag = false;
-
-			if (bq->shutdown_flag)
-				val->intval = 0;
-
-			if (last_shutdown_delay != bq->shutdown_delay || val->intval == 0) {
-				last_shutdown_delay = bq->shutdown_delay;
-				if (bq->fg_psy)
-					power_supply_changed(bq->fg_psy);
-				fg_err("%s power_supply_changed\n", bq->log_tag);
-			}
-		}
+		val->intval = bq->ui_soc;	
 		break;
 	case POWER_SUPPLY_PROP_TEMP:
 		if (bq->fake_tbat) {
